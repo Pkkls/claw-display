@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install --quiet pillow
+      # The panel cannot be reached from CI, but every page is rendered here.
+      # On the board itself the daemon owns the GPIO lines and nothing else can
+      # draw, so off-device rendering is the only place this is checkable.
+      - name: Render every page
+        run: python clawdisp.py --selftest
+      - name: show.py stays importable without the board
+        run: |
+          python - <<'PY'
+          import sys, types
+          # The vendor driver only exists on the board; stub it so the module
+          # imports and the rendering functions can be exercised.
+          sys.modules['st7789'] = types.ModuleType('st7789')
+          sys.modules['config'] = types.ModuleType('config')
+          import show
+          img = show.render_text("wrap this sentence across several lines", title="CI")
+          assert img.size == (240, 240), img.size
+          assert show.render_test().size == (240, 240)
+          print("show.py rendering ok")
+          PY
