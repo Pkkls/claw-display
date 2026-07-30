@@ -42,15 +42,14 @@ def picoclaw_running():
 
 
 def open_panel():
-    """Builds the driver from picoclaw's own config so the pins stay in sync."""
-    from config import SPI_PORT, SPI_DC, SPI_RST, SPI_BACKLIGHT, SPI_SPEED_HZ, SPI_ROTATION
-    from st7789 import ST7789
+    """Vendor driver where one is installed, otherwise spidev and GPIO sysfs.
 
-    panel = ST7789(
-        port=SPI_PORT, dc=SPI_DC, rst=SPI_RST, backlight=SPI_BACKLIGHT,
-        spi_speed_hz=SPI_SPEED_HZ, rotation=SPI_ROTATION,
-    )
-    return panel
+    The fallback is what lets this run on a board with no vendor stack, where
+    the panel would otherwise be unreachable.
+    """
+    from panel import open_panel as _open
+
+    return _open(WIDTH, HEIGHT)
 
 
 def load_font(size):
