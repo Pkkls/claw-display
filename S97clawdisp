@@ -1,0 +1,64 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          clawdisp
+# Short-Description: Status display on the ST7789 panel
+### END INIT INFO
+#
+# Starts before picoclaw's own numbers so that whichever is enabled owns the
+# panel. The GPIO lines are exclusive: two processes cannot share them, and the
+# second to start fails with "get gpio line failed".
+
+DIR="/root/clawdisp"
+
+# Optional: a host on the local network to watch on the NETWORK page. Set it
+# here, or in /etc/default/clawdisp so an update of this script does not lose it.
+[ -f /etc/default/clawdisp ] && . /etc/default/clawdisp
+export CLAWDISP_PEER CLAWDISP_PEER_LABEL
+PID_FILE="/var/run/clawdisp.pid"
+LOG_FILE="/var/log/clawdisp.log"
+
+start() {
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "clawdisp already running (pid $(cat "$PID_FILE"))"
+        return 0
+    fi
+    if ps | grep -q "[a]pp_picoclaw"; then
+        echo "picoclaw owns the panel, refusing to start" >&2
+        return 1
+    fi
+    echo "Starting clawdisp..."
+    cd "$DIR" || return 1
+    # Keep the log bounded: this board has no logrotate and runs for weeks.
+    if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE")" -gt 262144 ]; then
+        rm -f "$LOG_FILE"
+    fi
+    /usr/bin/python3 "$DIR/clawdisp.py" >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "clawdisp started (pid $(cat "$PID_FILE"))"
+}
+
+stop() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "clawdisp not running"
+        return 0
+    fi
+    kill "$(cat "$PID_FILE")" 2>/dev/null
+    sleep 1
+    kill -9 "$(cat "$PID_FILE")" 2>/dev/null
+    rm -f "$PID_FILE"
+    echo "clawdisp stopped"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    status)
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "running (pid $(cat "$PID_FILE"))"
+        else
+            echo "stopped"
+        fi
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|status}" ; exit 1 ;;
+esac
