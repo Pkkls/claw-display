@@ -183,17 +183,27 @@ def cached(key, ttl, fn):
 
 
 def dns_resolves(server, name=DNS_PROBE_NAME):
-    """Answers whether the server actually resolves, not whether it listens.
+    """Answers whether the server is serving DNS, not whether it listens.
 
     A port that accepts connections proves a process is bound to it and
-    nothing more. Resolution is the function; that is what gets checked.
+    nothing more. What counts is whether a query gets an answer.
+
+    Measured against busybox nslookup rather than assumed. Three things that
+    matter and are not obvious:
+      * the exit status is 0 even when the server is unreachable, so it
+        carries no information and is not used;
+      * a dead server prints "connection timed out", with no answer section;
+      * NXDOMAIN is a *successful* exchange. A resolver that says "no such
+        name" is working. Treating that as a failure would report an outage
+        whenever the probed name is blocked, which on a DNS blocker is a
+        thing that happens on purpose.
     """
-    out = sh(f"nslookup {name} {server} 2>/dev/null")
-    if not out:
+    out = sh(f"nslookup {name} {server} 2>&1")
+    if not out or "timed out" in out or "no servers could be reached" in out:
         return False
-    # Skip the server's own address line, then require at least one answer.
-    body = out.split("Name:", 1)
-    return len(body) > 1 and "Address" in body[1]
+    # Either an answer section, or an authoritative "no such name". Both prove
+    # the server answered.
+    return "Name:" in out.split("Address:", 1)[-1] or "can't find" in out
 
 
 def page_network():
@@ -410,17 +420,30 @@ def _selftest():
     assert cached("k", 60, lambda: "fresh") == "fresh", "an expired entry must be refetched"
     _probe_cache.clear()
 
-    # nslookup output must be read as an answer, not as the server echoing itself.
+    # These three strings are captured verbatim from busybox nslookup on the
+    # board, not invented. The probe was written against invented output once
+    # and got NXDOMAIN wrong, so the fixtures are now the real thing.
+    WORKING = (
+        "Server:\t\t192.168.1.46\nAddress:\t192.168.1.46:53\n\n"
+        "Non-authoritative answer:\nName:\texample.com\nAddress: 104.20.23.154\n"
+    )
+    DEAD = ";; connection timed out; no servers could be reached\n"
+    NXDOMAIN = (
+        "Server:\t\t192.168.1.46\nAddress:\t192.168.1.46:53\n\n"
+        "** server can't find nxdomain-test-zzz.invalid: NXDOMAIN\n"
+    )
+
     real_sh = globals()["sh"]
     try:
-        globals()["sh"] = lambda cmd: "Server: 10.0.0.1\nAddress: 10.0.0.1#53\n"
-        assert dns_resolves("10.0.0.1") is False, "no answer section means no resolution"
+        globals()["sh"] = lambda cmd: WORKING
+        assert dns_resolves("x") is True, "a normal answer is a working resolver"
+        globals()["sh"] = lambda cmd: DEAD
+        assert dns_resolves("x") is False, "an unreachable server is a failure"
+        globals()["sh"] = lambda cmd: NXDOMAIN
+        assert dns_resolves("x") is True, \
+            "NXDOMAIN is a successful exchange: the resolver answered"
         globals()["sh"] = lambda cmd: ""
-        assert dns_resolves("10.0.0.1") is False, "empty output means failure, not success"
-        globals()["sh"] = lambda cmd: (
-            "Server: 10.0.0.1\nAddress: 10.0.0.1#53\n\nName:\texample.com\nAddress: 93.184.216.34\n"
-        )
-        assert dns_resolves("10.0.0.1") is True
+        assert dns_resolves("x") is False, "no output at all is a failure"
     finally:
         globals()["sh"] = real_sh
 
