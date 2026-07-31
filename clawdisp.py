@@ -56,10 +56,18 @@ BAD = (225, 90, 90)
 
 
 def sh(cmd, timeout=5):
+    """Runs a command and returns its output, or None if it could not run.
+
+    None and "" are deliberately different. A command that produced no output
+    and a command that never ran look identical once both become "", and every
+    caller here then reports the absence as a measurement: no addresses found,
+    no processes alive. On a screen whose only job is to say what is true about
+    this board, that turns a failed probe into an outage report.
+    """
     try:
         out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None
     return out.stdout.strip()
 
 
@@ -97,19 +105,25 @@ def disk_pct(path="/"):
     # statvfs is POSIX only. Guarding it keeps the render path testable on a
     # development machine, which is the only place these pages can be checked
     # without the panel in hand.
+    # None, jamais 0 : un disque illisible affiche en "0 %" est le pire des
+    # rendus possibles, puisque zero pour cent occupe est exactement ce qu'on
+    # veut voir. L'inconnu doit se voir comme inconnu.
     if not hasattr(os, "statvfs"):
-        return 0
+        return None
     try:
         st = os.statvfs(path)
     except OSError:
-        return 0
+        return None
     total = st.f_blocks * st.f_frsize
     free = st.f_bavail * st.f_frsize
-    return int(100 * (total - free) / total) if total else 0
+    return int(100 * (total - free) / total) if total else None
 
 
 def ip_address():
-    for candidate in sh("ip -4 addr show 2>/dev/null").splitlines():
+    out = sh("ip -4 addr show 2>/dev/null")
+    if out is None:
+        return "?"  # la commande n'a pas tourne, pas "la carte n'a pas d'IP"
+    for candidate in out.splitlines():
         line = candidate.strip()
         if line.startswith("inet ") and not line.startswith("inet 127."):
             return line.split()[1].split("/")[0]
@@ -171,7 +185,8 @@ def page_system():
         ("uptime", up, FG),
         ("load", load, level(_f(load), warn=4)),
         ("mem", f"{pct}% {used}M", level(pct, warn=75, bad=90)),
-        ("disk", f"{disk}%", level(disk, bad=90)),
+        ("disk", "?" if disk is None else f"{disk}%",
+         WARN if disk is None else level(disk, bad=90)),
         ("host", socket.gethostname()[:14], DIM),
     ])
 
@@ -213,6 +228,10 @@ def dns_resolves(server, name=DNS_PROBE_NAME):
         thing that happens on purpose.
     """
     out = sh(f"nslookup {name} {server} 2>&1")
+    # `out is None` (la commande n'a pas pu tourner) est volontairement replie
+    # sur "pas ok", contrairement aux autres sondes de ce fichier : un resolveur
+    # qu'on ne peut pas interroger n'est pas utilisable non plus, donc les deux
+    # cas se valent pour qui lit l'ecran. Le choix est explicite, pas hérité.
     if not out or "timed out" in out or "no servers could be reached" in out:
         return False
     # Either an answer section, or an authoritative "no such name". Both prove
@@ -256,6 +275,15 @@ def watched():
 
 def page_services():
     procs = sh("ps")
+    # `ps` qui ne tourne pas donnait une liste vide, donc TOUS les services
+    # affiches "off" : l'ecran annoncait la carte entiere a l'arret alors que
+    # c'est la sonde qui avait echoue. C'est la direction alarmante de l'erreur,
+    # celle qui apprend a ne plus croire l'ecran.
+    if procs is None:
+        rows = [(label, "?", WARN) for label, _ in watched()]
+        rows.append(("procs", "?", WARN))
+        return frame("SERVICES", rows, accent=WARN)
+
     lines = [l for l in procs.splitlines() if "grep" not in l]
     rows = []
     for label, needle in watched():
@@ -451,10 +479,27 @@ def _selftest():
         globals()["sh"] = real_sh
         globals()["WATCH"] = keep_watch
 
-    # A command that hangs must return empty rather than block the redraw loop
+    # A command that hangs must return rather than block the redraw loop
     # forever: every page calls sh(), and the panel would freeze mid-frame.
+    # It returns None, not "": this assertion used to demand "" and was right
+    # about the old behaviour, which is exactly what was wrong. A probe that
+    # could not run and a probe that found nothing were the same value, so
+    # `ps` failing painted every service "off" and a failed statvfs painted
+    # the disk at a reassuring 0%.
     hung = real_sh(f'"{sys.executable}" -c "import time; time.sleep(5)"', timeout=1)
-    assert hung == "", "a command past its timeout must yield nothing, not hang"
+    assert hung is None, "a command past its timeout must yield None, not hang or look empty"
+    empty = real_sh(f'"{sys.executable}" -c "pass"')
+    assert empty == "", "a command that ran and printed nothing must not look like a failure"
+
+    # Les rendus qui en dependent doivent montrer l'inconnu comme inconnu.
+    globals()["sh"] = lambda *a, **k: None
+    try:
+        assert ip_address() == "?", "une commande morte ne prouve pas l'absence d'IP"
+        svc = page_services()
+        assert svc.size == (WIDTH, HEIGHT), "la page services doit rester rendable"
+    finally:
+        globals()["sh"] = real_sh
+    assert disk_pct("/definitely/not/a/path") is None, "un disque illisible n'est pas a 0%"
 
     # The cache must actually prevent repeat calls: without it the panel would
     # query a DNS server about once a second just to draw one line.
