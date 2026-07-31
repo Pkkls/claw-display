@@ -49,6 +49,10 @@ Install it anyway. With `CLAWDISP_ENABLE=0` in `/etc/default/clawdisp` the servi
 
 The vendor-free backend in `panel.py` exists for exactly this case: a board with no vendor libraries, driven by nothing but `spidev` and the legacy GPIO sysfs. Pins come from `PANEL_SPI_BUS`, `PANEL_DC`, `PANEL_RST` and `PANEL_BL`.
 
+## Checking a peer actually works
+
+A reachable host is not a working one. If the peer serves DNS, set `CLAWDISP_DNS_CHECK=1` and the network page resolves a name through it rather than pinging it: a port that accepts connections proves a process is bound and nothing more. The probe is cached for a minute, because the panel redraws about once a second and a status line should not become a load source.
+
 ## Is it actually drawing?
 
 A running process is not a working one, and a status display that can go silent without saying so defeats its own purpose. After every successful draw the daemon writes `/tmp/clawdisp.state`:
