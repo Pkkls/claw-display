@@ -26,6 +26,9 @@ from PIL import Image, ImageDraw  # noqa: E402
 from show import WIDTH, HEIGHT, load_font, open_panel, wrap  # noqa: E402
 
 MSG_PATH = os.environ.get("CLAWDISP_MSG", "/root/clawdisp/msg.txt")
+# Written after every successful draw, so "is the screen alive" is answerable
+# from another machine without eyes on the panel.
+STATE_PATH = os.environ.get("CLAWDISP_STATE", "/tmp/clawdisp.state")
 # A host on the local network to watch, and what to call it on screen. Left
 # empty the network page simply omits the row.
 PEER_HOST = os.environ.get("CLAWDISP_PEER", "")
@@ -201,6 +204,23 @@ def _f(value):
 PAGES = [page_system, page_network, page_services]
 
 
+def write_heartbeat(index, error):
+    """Records that a frame actually reached the panel.
+
+    A running process is not a working one: the whole point of this display is
+    to reveal that kind of silence, so it must not be able to hide its own. The
+    file carries the time of the last successful draw, so a reader can tell a
+    live screen from a process that is merely alive.
+    """
+    page = "message" if read_message() else PAGES[index % len(PAGES)].__name__
+    line = f"{int(time.time())} {page} {'ok' if error is None else 'error: ' + error[:80]}\n"
+    try:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass  # never let observability kill the display
+
+
 def build_frame(index):
     message = read_message()
     if message:
@@ -239,9 +259,11 @@ def main():
             last_turn = now
         try:
             panel.display(build_frame(index))
+            write_heartbeat(index, None)
         except Exception as err:                      # noqa: BLE001
             # A transient failure must not kill a display that runs for weeks.
             print(f"draw failed: {err}", file=sys.stderr)
+            write_heartbeat(index, str(err))
             time.sleep(5)
         time.sleep(REFRESH_SECONDS)
 
@@ -293,6 +315,28 @@ def _selftest():
             MSG_PATH = original
 
     assert _f("1.5") == 1.5 and _f("n/a") == 0.0 and _f(None) == 0.0
+
+    # The heartbeat must record the page drawn and survive an unwritable path,
+    # because observability that can crash the display is worse than none.
+    with tempfile.TemporaryDirectory() as d:
+        global STATE_PATH
+        original_state = STATE_PATH
+        STATE_PATH = os.path.join(d, "state")
+        try:
+            write_heartbeat(0, None)
+            recorded = open(STATE_PATH, encoding="utf-8").read().split()
+            assert recorded[1] == "page_system", recorded
+            assert recorded[2] == "ok", recorded
+            assert int(recorded[0]) > 0, recorded
+
+            write_heartbeat(1, "spi closed")
+            assert "error" in open(STATE_PATH, encoding="utf-8").read()
+
+            STATE_PATH = os.path.join(d, "nope", "state")
+            write_heartbeat(0, None)  # must not raise
+        finally:
+            STATE_PATH = original_state
+
     print("selftest ok")
 
 

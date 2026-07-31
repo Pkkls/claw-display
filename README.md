@@ -43,6 +43,23 @@ scp S97clawdisp root@board:/etc/init.d/
 ssh root@board 'chmod +x /etc/init.d/S97clawdisp && /etc/init.d/S97clawdisp start'
 ```
 
+## Is it actually drawing?
+
+A running process is not a working one, and a status display that can go silent without saying so defeats its own purpose. After every successful draw the daemon writes `/tmp/clawdisp.state`:
+
+```
+1785499422 page_system ok
+```
+
+Unix time of the last frame, the page that was drawn, and `ok` or the error. Compare it twice to tell a live panel from a process that is merely alive:
+
+```sh
+a=$(awk '{print $1}' /tmp/clawdisp.state); sleep 20
+[ "$(awk '{print $1}' /tmp/clawdisp.state)" -gt "$a" ] && echo alive || echo stuck
+```
+
+Writing that file can never crash the display: an unwritable path is swallowed, because observability that takes down the thing it observes is worse than none.
+
 ## Things worth knowing before you adapt this
 
 **The GPIO lines are exclusive.** Only one process can hold the panel's DC and RESET lines. A second one fails with `get gpio line failed`, which says nothing about the real cause. If another app already drives the screen, stop it first; the init script refuses to start rather than produce that error.
