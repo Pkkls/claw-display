@@ -13,11 +13,18 @@ DIR="/root/clawdisp"
 # Optional: a host on the local network to watch on the NETWORK page. Set it
 # here, or in /etc/default/clawdisp so an update of this script does not lose it.
 [ -f /etc/default/clawdisp ] && . /etc/default/clawdisp
-export CLAWDISP_PEER CLAWDISP_PEER_LABEL CLAWDISP_WATCH
+export CLAWDISP_PEER CLAWDISP_PEER_LABEL CLAWDISP_WATCH CLAWDISP_ENABLE
 PID_FILE="/var/run/clawdisp.pid"
 LOG_FILE="/var/log/clawdisp.log"
 
 start() {
+    # A board with no panel wired should install this and cost nothing until a
+    # screen exists. Set CLAWDISP_ENABLE=0 in /etc/default/clawdisp there; the
+    # code sits ready and one line turns it on.
+    if [ "${CLAWDISP_ENABLE:-1}" = "0" ]; then
+        echo "clawdisp disabled (no panel on this board); set CLAWDISP_ENABLE=1 to use it"
+        return 0
+    fi
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
         echo "clawdisp already running (pid $(cat "$PID_FILE"))"
         return 0

@@ -43,6 +43,12 @@ scp S97clawdisp root@board:/etc/init.d/
 ssh root@board 'chmod +x /etc/init.d/S97clawdisp && /etc/init.d/S97clawdisp start'
 ```
 
+## Installing on a board with no panel yet
+
+Install it anyway. With `CLAWDISP_ENABLE=0` in `/etc/default/clawdisp` the service starts, says why it is not running, and exits. Nothing runs, nothing is consumed, and the selftest still passes on the board, so the stack is proven ready rather than assumed ready. Wire a 240x240 ST7789 to an SPI bus, set the flag to 1, start the service.
+
+The vendor-free backend in `panel.py` exists for exactly this case: a board with no vendor libraries, driven by nothing but `spidev` and the legacy GPIO sysfs. Pins come from `PANEL_SPI_BUS`, `PANEL_DC`, `PANEL_RST` and `PANEL_BL`.
+
 ## Is it actually drawing?
 
 A running process is not a working one, and a status display that can go silent without saying so defeats its own purpose. After every successful draw the daemon writes `/tmp/clawdisp.state`:
