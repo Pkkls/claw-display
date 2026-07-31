@@ -149,15 +149,29 @@ def frame(title, rows, accent=OK):
     return img
 
 
+def level(value, warn=None, bad=None):
+    """Picks the colour for a measurement.
+
+    Extracted so the thresholds can be asserted directly: rendering a page and
+    eyeballing it proves nothing, and mutation testing showed every threshold
+    here could be changed to an absurd value with the suite still passing.
+    """
+    if bad is not None and value > bad:
+        return BAD
+    if warn is not None and value > warn:
+        return WARN
+    return FG
+
+
 def page_system():
     up, load = uptime_load()
     used, total, pct = memory()
     disk = disk_pct()
     return frame("SYSTEM", [
         ("uptime", up, FG),
-        ("load", load, WARN if _f(load) > 4 else FG),
-        ("mem", f"{pct}% {used}M", BAD if pct > 90 else WARN if pct > 75 else FG),
-        ("disk", f"{disk}%", BAD if disk > 90 else FG),
+        ("load", load, level(_f(load), warn=4)),
+        ("mem", f"{pct}% {used}M", level(pct, warn=75, bad=90)),
+        ("disk", f"{disk}%", level(disk, bad=90)),
         ("host", socket.gethostname()[:14], DIM),
     ])
 
@@ -408,6 +422,40 @@ def _selftest():
 
     assert _f("1.5") == 1.5 and _f("n/a") == 0.0 and _f(None) == 0.0
 
+    # Thresholds decide whether a screen reads as normal from across a room.
+    # Mutation testing showed every one of them could be set to an absurd
+    # value with the suite still green, because only image size was asserted.
+    assert level(50, warn=75, bad=90) is FG
+    assert level(76, warn=75, bad=90) is WARN
+    assert level(91, warn=75, bad=90) is BAD
+    assert level(75, warn=75, bad=90) is FG, "the threshold itself is not yet a warning"
+    assert level(90, bad=90) is FG and level(91, bad=90) is BAD
+    assert level(5.0, warn=4) is WARN and level(0.5, warn=4) is FG
+
+    # The services page counts processes from ps output, which contains the
+    # grep used to search it. Nothing exercised that filter.
+    real_sh = globals()["sh"]
+    try:
+        globals()["sh"] = lambda cmd: (
+            "  1 root     /usr/bin/python3 clawdisp.py\n"
+            "  2 root     grep clawdisp.py\n"
+            "  3 root     sh\n"
+        )
+        keep_watch = WATCH
+        globals()["WATCH"] = "disp:clawdisp.py"
+        img = page_services()
+        assert img.size == (WIDTH, HEIGHT)
+        lines = [l for l in globals()["sh"]("ps").splitlines() if "grep" not in l]
+        assert len(lines) == 2, "the grep line must not be counted as a process"
+    finally:
+        globals()["sh"] = real_sh
+        globals()["WATCH"] = keep_watch
+
+    # A command that hangs must return empty rather than block the redraw loop
+    # forever: every page calls sh(), and the panel would freeze mid-frame.
+    hung = real_sh(f'"{sys.executable}" -c "import time; time.sleep(5)"', timeout=1)
+    assert hung == "", "a command past its timeout must yield nothing, not hang"
+
     # The cache must actually prevent repeat calls: without it the panel would
     # query a DNS server about once a second just to draw one line.
     calls = []
@@ -470,19 +518,19 @@ def _selftest():
     finally:
         globals()["open_panel"] = real_open
 
-    global WATCH
+    # WATCH is swapped through globals() below, no declaration needed
     original_watch = WATCH
     try:
-        WATCH = "bot:pkkls_bot, dns:dnsmasq ,, plain"
+        globals()["WATCH"] = "bot:pkkls_bot, dns:dnsmasq ,, plain"
         pairs = watched()
         assert pairs == [("bot", "pkkls_bot"), ("dns", "dnsmasq"), ("plain", "plain")], pairs
-        WATCH = ",".join(f"s{i}:x{i}" for i in range(9))
+        globals()["WATCH"] = ",".join(f"s{i}:x{i}" for i in range(9))
         assert len(watched()) == 5, "more rows than fit must be dropped, not overflow"
-        WATCH = ""
+        globals()["WATCH"] = ""
         assert watched() == [], "an empty list is valid, not a crash"
         assert page_services().size == (WIDTH, HEIGHT)
     finally:
-        WATCH = original_watch
+        globals()["WATCH"] = original_watch
 
     # The heartbeat must record the page drawn and survive an unwritable path,
     # because observability that can crash the display is worse than none.
