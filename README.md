@@ -72,7 +72,7 @@ Writing that file can never crash the display: an unwritable path is swallowed, 
 
 ## Things worth knowing before you adapt this
 
-**The GPIO lines are exclusive.** Only one process can hold the panel's DC and RESET lines. A second one fails with `get gpio line failed`, which says nothing about the real cause. If another app already drives the screen, stop it first; the init script refuses to start rather than produce that error.
+**The GPIO lines are exclusive.** Only one process can hold the panel's DC and RESET lines. A second one fails with `get gpio line failed`, which says nothing about the real cause. The daemon does not treat that as fatal: it waits and retries, recording the wait in the heartbeat, because a rival app may hold the panel for a second or for an hour and quitting on the first refusal leaves a black screen nobody notices.
 
 **The driver and pin map are not reimplemented here.** They are read from the vendor app already on the board, so a pin change stays in one place. A wrong DC or RESET pin displays nothing at all, with no error to explain it, so guessing them is expensive.
 
