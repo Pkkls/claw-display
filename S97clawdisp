@@ -13,7 +13,7 @@ DIR="/root/clawdisp"
 # Optional: a host on the local network to watch on the NETWORK page. Set it
 # here, or in /etc/default/clawdisp so an update of this script does not lose it.
 [ -f /etc/default/clawdisp ] && . /etc/default/clawdisp
-export CLAWDISP_PEER CLAWDISP_PEER_LABEL
+export CLAWDISP_PEER CLAWDISP_PEER_LABEL CLAWDISP_WATCH
 PID_FILE="/var/run/clawdisp.pid"
 LOG_FILE="/var/log/clawdisp.log"
 

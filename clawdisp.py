@@ -29,6 +29,10 @@ MSG_PATH = os.environ.get("CLAWDISP_MSG", "/root/clawdisp/msg.txt")
 # Written after every successful draw, so "is the screen alive" is answerable
 # from another machine without eyes on the panel.
 STATE_PATH = os.environ.get("CLAWDISP_STATE", "/tmp/clawdisp.state")
+# Processes to show on the services page: "label:needle" separated by commas,
+# where needle is what to look for in ps output. Defaults to this daemon alone,
+# since nothing else can be assumed to exist on someone else's board.
+WATCH = os.environ.get("CLAWDISP_WATCH", "clawdisp:clawdisp.py")
 # A host on the local network to watch, and what to call it on screen. Left
 # empty the network page simply omits the row.
 PEER_HOST = os.environ.get("CLAWDISP_PEER", "")
@@ -169,13 +173,31 @@ def page_network():
     return frame("NETWORK", rows, accent=OK if net_up else BAD)
 
 
+def watched():
+    """Processes to report on, as label:needle pairs.
+
+    Absent ones are drawn dim rather than red: a service that is off on
+    purpose must not look like an incident, or the screen teaches you to
+    ignore it.
+    """
+    pairs = []
+    for item in WATCH.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        label, _, needle = item.partition(":")
+        pairs.append((label.strip()[:9], (needle or label).strip()))
+    return pairs[:5]  # five rows is what fits
+
+
 def page_services():
     procs = sh("ps")
+    lines = [l for l in procs.splitlines() if "grep" not in l]
     rows = []
-    for label, needle in (("picoclaw", "app_picoclaw"), ("clawdisp", "clawdisp.py")):
-        alive = any(needle in line and "grep" not in line for line in procs.splitlines())
+    for label, needle in watched():
+        alive = any(needle in line for line in lines)
         rows.append((label, "run" if alive else "off", OK if alive else DIM))
-    rows.append(("procs", len(procs.splitlines()) - 1, FG))
+    rows.append(("procs", max(len(lines) - 1, 0), FG))
     return frame("SERVICES", rows, accent=DIM)
 
 
@@ -315,6 +337,20 @@ def _selftest():
             MSG_PATH = original
 
     assert _f("1.5") == 1.5 and _f("n/a") == 0.0 and _f(None) == 0.0
+
+    global WATCH
+    original_watch = WATCH
+    try:
+        WATCH = "bot:pkkls_bot, dns:dnsmasq ,, plain"
+        pairs = watched()
+        assert pairs == [("bot", "pkkls_bot"), ("dns", "dnsmasq"), ("plain", "plain")], pairs
+        WATCH = ",".join(f"s{i}:x{i}" for i in range(9))
+        assert len(watched()) == 5, "more rows than fit must be dropped, not overflow"
+        WATCH = ""
+        assert watched() == [], "an empty list is valid, not a crash"
+        assert page_services().size == (WIDTH, HEIGHT)
+    finally:
+        WATCH = original_watch
 
     # The heartbeat must record the page drawn and survive an unwritable path,
     # because observability that can crash the display is worse than none.
