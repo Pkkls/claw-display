@@ -68,7 +68,14 @@ def sh(cmd, timeout=5):
         out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None
-    return out.stdout.strip()
+    # Une commande qui sort en erreur sans rien ecrire n'a pas "produit du
+    # vide", elle n'a pas tourne. Sans ce test, une commande absente rendait ""
+    # et la page reseau annoncait "no ip" pour une sonde qui n'avait jamais
+    # interroge l'interface. Le premier correctif n'attrapait que l'exception.
+    text = out.stdout.strip()
+    if out.returncode != 0 and not text:
+        return None
+    return text
 
 
 def uptime_load():
@@ -85,7 +92,14 @@ def uptime_load():
 
 
 def memory():
-    """Returns (used_mb, total_mb, percent)."""
+    """Returns (used_mb, total_mb, percent), or (None, None, None) if unknown.
+
+    Not zeros. A board whose memory cannot be read rendered as "0% 0M", which
+    is the most reassuring reading available, while uptime, load and disk beside
+    it correctly showed "?". The same collapse had been fixed for the disk one
+    line below on the morning of 2026-08-01 and left standing here, and it was
+    only caught by rendering the page and looking at it.
+    """
     info = {}
     try:
         with open("/proc/meminfo") as f:
@@ -94,11 +108,13 @@ def memory():
                 if len(parts) >= 2:
                     info[parts[0].rstrip(":")] = int(parts[1])
     except (OSError, ValueError):
-        return 0, 0, 0
+        return None, None, None
     total = info.get("MemTotal", 0) // 1024
+    if not total:
+        return None, None, None
     available = info.get("MemAvailable", info.get("MemFree", 0)) // 1024
     used = total - available
-    return used, total, (100 * used // total if total else 0)
+    return used, total, 100 * used // total
 
 
 def disk_pct(path="/"):
@@ -184,7 +200,8 @@ def page_system():
     return frame("SYSTEM", [
         ("uptime", up, FG),
         ("load", load, level(_f(load), warn=4)),
-        ("mem", f"{pct}% {used}M", level(pct, warn=75, bad=90)),
+        ("mem", "?" if pct is None else f"{pct}% {used}M",
+         WARN if pct is None else level(pct, warn=75, bad=90)),
         ("disk", "?" if disk is None else f"{disk}%",
          WARN if disk is None else level(disk, bad=90)),
         ("host", socket.gethostname()[:14], DIM),
@@ -500,6 +517,22 @@ def _selftest():
     finally:
         globals()["sh"] = real_sh
     assert disk_pct("/definitely/not/a/path") is None, "un disque illisible n'est pas a 0%"
+
+    # La memoire suit la meme regle que le disque. Elle ne la suivait pas : la
+    # page SYSTEM affichait "0% 0M" a cote de trois "?" honnetes, et ca n'a ete
+    # vu qu'en rendant la page et en la regardant.
+    if not os.path.exists("/proc/meminfo"):
+        assert memory() == (None, None, None), "une memoire illisible n'est pas a 0%"
+    globals()["sh"] = lambda *a, **k: None
+    try:
+        page = page_system()
+        assert page.size == (WIDTH, HEIGHT)
+    finally:
+        globals()["sh"] = real_sh
+
+    # Une commande qui sort en erreur sans rien ecrire n'a pas produit du vide.
+    assert real_sh("exit 3") is None, "un code de sortie non nul doit rendre None"
+    assert real_sh(f'"{sys.executable}" -c "print(1)"') == "1", "une sortie valide passe"
 
     # The cache must actually prevent repeat calls: without it the panel would
     # query a DNS server about once a second just to draw one line.
