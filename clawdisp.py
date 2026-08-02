@@ -199,7 +199,12 @@ def page_system():
     disk = disk_pct()
     return frame("SYSTEM", [
         ("uptime", up, FG),
-        ("load", load, level(_f(load), warn=4)),
+        # `_f("?")` vaut 0.0, et `level(0.0)` rend la couleur saine : une
+        # charge illisible s'affichait exactement comme une charge nulle,
+        # pendant que mem et disk juste en dessous passent explicitement en
+        # ambre quand elles ne savent pas. L'inconnu se lisait comme normal
+        # sur la seule ligne qui ne le signalait pas.
+        ("load", load, WARN if load == "?" else level(_f(load), warn=4)),
         ("mem", "?" if pct is None else f"{pct}% {used}M",
          WARN if pct is None else level(pct, warn=75, bad=90)),
         ("disk", "?" if disk is None else f"{disk}%",
@@ -286,7 +291,16 @@ def watched():
         if not item:
             continue
         label, _, needle = item.partition(":")
-        pairs.append((label.strip()[:9], (needle or label).strip()))
+        # `(needle or label).strip()` laissait passer un besoin fait
+        # uniquement d'espaces : truthy, donc conserve, puis vide apres le
+        # strip. Le test d'appartenance devient `"" in ligne`, vrai pour toute
+        # ligne de `ps`, et le service s'affichait "run" en vert quoi qu'il
+        # arrive. Un ecran qui ment en vert est pire qu'un ecran eteint.
+        # Le strip doit donc preceder le repli sur le label, pas le suivre.
+        needle = needle.strip() or label.strip()
+        if not needle:
+            continue
+        pairs.append((label.strip()[:9], needle))
     return pairs[:5]  # five rows is what fits
 
 
@@ -606,6 +620,18 @@ def _selftest():
         assert len(watched()) == 5, "more rows than fit must be dropped, not overflow"
         globals()["WATCH"] = ""
         assert watched() == [], "an empty list is valid, not a crash"
+
+        # Aucun besoin ne doit pouvoir finir vide : `"" in ligne` est vrai pour
+        # toute ligne de `ps`, donc un besoin vide affiche le service en vert
+        # quoi qu'il arrive. Les trois formes qui y menaient sont testees, et
+        # le cas temoin juste apres doit, lui, produire une paire.
+        for hostile in ("a: ", ":", "a:b,: ", " : ", "a:\t"):
+            globals()["WATCH"] = hostile
+            for label, needle in watched():
+                assert needle.strip(), f"{hostile!r} a produit un besoin vide: {needle!r}"
+        globals()["WATCH"] = "svc:"        # temoin : repli sur le label
+        assert watched() == [("svc", "svc")], watched()
+
         assert page_services().size == (WIDTH, HEIGHT)
     finally:
         globals()["WATCH"] = original_watch
